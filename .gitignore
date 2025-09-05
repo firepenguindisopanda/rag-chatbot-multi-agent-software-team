@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+.env
+.env.*
+# Jupyter
+.ipynb_checkpoints
+# Virtualenv/Pipenv
+.pytest_cache/
+pip-wheel-metadata/
+# OS
+.DS_Store
+Thumbs.db
+# Data & indexes
+docstore_index/
+docstore_index.tgz
+data_vectorstore_index.tgz
+# Logs
+*.log
+# Secrets (never track API keys)
+*.key
+*.pem

@@ -1,0 +1,23 @@
+fastapi
+uvicorn
+gradio  # retained temporarily for backward compatibility with existing tests; can be removed later
+streamlit>=1.36.0
+pymupdf
+langchain
+langchain-community
+langchain-nvidia-ai-endpoints
+langchain-core
+langchain-experimental
+langgraph
+langserve
+faiss-cpu
+python-multipart
+pydantic
+pandas
+numpy
+matplotlib
+seaborn
+plotly
+openpyxl
+xlrd
+scikit-learn

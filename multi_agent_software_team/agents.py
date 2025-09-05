@@ -12,7 +12,16 @@ class Agent:
         self.role = role
         self.llm = llm
         self.system_prompts = create_system_prompts()
-    
+        # Attempt to attach knowledge base lazily; llm expected to maybe have an embedder attribute
+        self._kb = None
+        try:
+            from .knowledge_base_manager import get_kb  # local import to avoid hard dependency if modules missing
+            embedder = getattr(llm, 'embedder', None) or getattr(llm, 'embeddings', None) or None
+            if embedder:
+                self._kb = get_kb(embedder)
+        except Exception as e:
+            logger.debug(f"Knowledge base not initialized for {self.role.value}: {e}")
+
     def _extract_project_complexity(self, description: str) -> str:
         """Analyze project complexity to adjust agent responses."""
         complexity_indicators = {
@@ -46,6 +55,27 @@ class Agent:
         
         return summary
     
+    def _retrieve_kb_context(self, project_description: str) -> str:
+        """Retrieve knowledge base snippets for this agent's role if available."""
+        if not self._kb:
+            return ""
+        try:
+            # Use a focused query; could be improved with dynamic query generation
+            base_query = project_description.split('\n')[0][:200]
+            docs = self._kb.retrieve(self.role.value, base_query, k=3)
+            if not docs:
+                # Lazy ingest attempt (e.g., first time) already handled inside retrieve
+                return ""
+            snippets = []
+            for d in docs:
+                text = d.page_content.strip().replace('\n', ' ')[:500]
+                snippets.append(f"- {text}")
+            if snippets:
+                return "ROLE KNOWLEDGE BASE EXTRACTS:\n" + "\n".join(snippets)
+        except Exception as e:
+            logger.debug(f"KB retrieval failed for {self.role.value}: {e}")
+        return ""
+
     def process(self, project_description: str, previous_outputs: List[AgentMessage] = None) -> AgentResponse:
         """Process the project description and previous outputs to generate a response."""
         try:
@@ -62,6 +92,11 @@ class Agent:
                     # For later agents, use summary to avoid token limits
                     context = self._get_context_summary(previous_outputs)
             
+            # Retrieve knowledge base context
+            kb_context = self._retrieve_kb_context(project_description)
+            if kb_context:
+                context = f"{kb_context}\n\n{context}" if context else kb_context
+            
             # Add complexity guidance to prompt
             complexity_guidance = {
                 'simple': "Focus on essential features and straightforward implementation.",
@@ -74,10 +109,10 @@ class Agent:
                 f"PROJECT COMPLEXITY: {complexity.upper()} - {complexity_guidance[complexity]}\n\n"
                 "PROJECT DESCRIPTION:\n{project_description}\n\n"
                 "{context}\n\n"
-                "Based on the project description, complexity level, and any previous team outputs, "
+                "Based on the project description, complexity level, knowledge base extracts (if any), and previous team outputs, "
                 "provide your response according to your role's output format. "
                 "Be comprehensive but focused on your specific role. "
-                "Ensure your output builds upon and references previous team work when relevant."
+                "Ensure your output builds upon and references previous team work and knowledge base material when relevant."
             )
             
             prompt = ChatPromptTemplate.from_template(prompt_template)

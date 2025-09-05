@@ -3,6 +3,7 @@ uvicorn
 gradio  # retained temporarily for backward compatibility with existing tests; can be removed later
 streamlit>=1.36.0
 pymupdf
+python-dotenv
 langchain
 langchain-community
 langchain-nvidia-ai-endpoints

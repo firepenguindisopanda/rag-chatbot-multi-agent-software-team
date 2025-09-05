@@ -6,8 +6,21 @@ Final test of the fixed multi-agent system with the actual RAG application
 import os
 import sys
 
-# Set environment
-os.environ["NVIDIA_API_KEY"] = "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"
+# Load environment (supports .env) instead of hardcoding secrets
+try:  # optional dependency already in requirements
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv()
+except Exception:
+    pass
+
+API_KEY = os.getenv("NVIDIA_API_KEY")
+if not API_KEY:
+    # If running under pytest, mark skip at module import time
+    try:
+        import pytest  # type: ignore
+        pytest.skip("NVIDIA_API_KEY not set; skipping integration test that requires live NVIDIA endpoint", allow_module_level=True)
+    except Exception:
+        print("⚠ NVIDIA_API_KEY not set; test will likely fail or use mock if available.")
 
 # Add path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -16,22 +29,21 @@ def test_final_integration():
     """Test the complete fixed integration."""
     print("🎉 Testing Fixed Multi-Agent Integration")
     print("=" * 50)
-    
     try:
         from enhanced_multi_agent_integration import run_enhanced_multi_agent_collaboration
         from langchain_nvidia_ai_endpoints import ChatNVIDIA
-        
-        # Initialize LLM
+
+        # Initialize only if key present; otherwise underlying lib handles error/mocking
         llm = ChatNVIDIA(model="meta/llama-3.1-8b-instruct")
         print("✅ LLM initialized")
-        
+
         # Test the integration function
         project_description = "Create a simple task management web application for small teams with user login and task assignment features"
-        
+
         print("🚀 Running enhanced multi-agent collaboration...")
         result = run_enhanced_multi_agent_collaboration(llm, project_description)
-        
-        print(f"\n📊 Results:")
+
+        print("\n📊 Results:")
         print(f"- Output length: {len(result):,} characters")
         print(f"- Success: {'✅' if not result.startswith('❌') else '❌'}")
         
@@ -44,16 +56,16 @@ def test_final_integration():
             print(f"- Sections found: {sections}")
             print(f"- Mermaid diagrams: {diagrams}")
             
-            print(f"\n📄 Preview (first 500 chars):")
+            print("\n📄 Preview (first 500 chars):")
             print(result[:500] + "..." if len(result) > 500 else result)
         
         # Save the result to file for inspection
         with open("test_fixed_result.md", "w", encoding="utf-8") as f:
             f.write(result)
-        print(f"\n💾 Full result saved to: test_fixed_result.md")
-        
+        print("\n💾 Full result saved to: test_fixed_result.md")
+
         return True
-        
+
     except Exception as e:
         print(f"❌ Error: {str(e)}")
         import traceback

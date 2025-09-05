@@ -6,8 +6,23 @@ Quick test to check NVIDIA API connectivity
 import os
 import sys
 
-# Set the API key
-os.environ["NVIDIA_API_KEY"] = "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"
+# Load environment variables (e.g., from .env) instead of hardcoding secrets
+try:
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv()
+except Exception:
+    pass
+
+API_KEY = os.getenv("NVIDIA_API_KEY")
+if not API_KEY:
+    # If executed via pytest, skip; otherwise warn
+    try:
+        import pytest  # type: ignore
+        pytest.skip("NVIDIA_API_KEY not set; skipping live NVIDIA API connectivity test", allow_module_level=True)
+    except Exception:
+        print("⚠ NVIDIA_API_KEY not set; skipping live call. Set it in your environment or .env file.")
+        # Exit early to avoid network errors
+        sys.exit(0)
 
 try:
     from langchain_nvidia_ai_endpoints import ChatNVIDIA

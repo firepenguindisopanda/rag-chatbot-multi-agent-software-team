@@ -8,6 +8,14 @@ import logging
 import random
 import uvicorn
 import gradio as gr
+from typing import Optional
+
+# Optional dotenv load (will be no-op if not installed)
+try:
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv()
+except Exception:
+    pass
 
 # Configure matplotlib for non-GUI environment
 import matplotlib
@@ -70,18 +78,40 @@ def get_traceback(e):
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# Set API key for NVIDIA endpoints
-os.environ["NVIDIA_API_KEY"] = "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"
+# Secure API key loading (removed hardcoded key)
+def load_nvidia_api_key() -> Optional[str]:
+    """Load NVIDIA API key from (priority):
+    1. Existing env var NVIDIA_API_KEY
+    2. Streamlit secrets (if running under Streamlit)
+    3. .env file (via python-dotenv already loaded)
+    Returns the key or None if not found.
+    """
+    # 1. Direct env
+    key = os.environ.get("NVIDIA_API_KEY")
+    if key:
+        return key
+    # 2. Streamlit secrets (lazy import to avoid dependency at server runtime)
+    try:
+        import streamlit as st  # type: ignore
+        if hasattr(st, "secrets") and "NVIDIA_API_KEY" in st.secrets:
+            return st.secrets["NVIDIA_API_KEY"]
+    except Exception:
+        pass
+    # 3. Fallback already attempted via load_dotenv
+    return os.environ.get("NVIDIA_API_KEY")  # may be None
+
+NVIDIA_API_KEY = load_nvidia_api_key()
 
 # Initialize embeddings model and LLM with error handling
 try:
+    if not NVIDIA_API_KEY:
+        raise ValueError("NVIDIA_API_KEY not set; using mock models")
     embedder = NVIDIAEmbeddings(model="nvidia/nv-embed-v1", truncate="END")
-    llm = ChatNVIDIA(model="meta/llama-3.1-70b-instruct", api_key=os.environ["NVIDIA_API_KEY"])
-    # meta/llama-3.3-70b-instruct
-    logger.info("NVIDIA AI endpoints initialized successfully")
+    llm = ChatNVIDIA(model="meta/llama-3.1-70b-instruct", api_key=NVIDIA_API_KEY)
+    logger.info("NVIDIA AI endpoints initialized successfully (secure load)")
 except Exception as e:
-    logger.error(f"Failed to initialize NVIDIA endpoints: {e}")
-    logger.info("The API key might be invalid or expired. You'll need a valid NVIDIA API key to use the LLM features.")
+    logger.error(f"Failed to initialize NVIDIA endpoints (falling back to mock): {e}")
+    logger.info("Set NVIDIA_API_KEY via environment, .env, or Streamlit secrets for real responses.")
     # For now, create a mock LLM for testing
     class MockLLM:
         def invoke(self, text):

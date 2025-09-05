@@ -29,7 +29,8 @@ class SystemConfig:
     DATA_VECTORSTORE_ARCHIVE = "data_vectorstore_index.tgz"
     
     # API Configuration
-    NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "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")
+    # Removed hardcoded key. Provide via environment, .env, or secrets manager.
+    NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
     
     # Model Configuration
     EMBEDDING_MODEL = "nvidia/nv-embed-v1"

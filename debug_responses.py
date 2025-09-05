@@ -6,8 +6,15 @@ Debug the actual LLM responses to see why handoffs are failing
 import os
 import sys
 
-# Set environment
-os.environ["NVIDIA_API_KEY"] = "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"
+# Load environment variables (from .env if available) instead of hardcoding secrets
+try:
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv()
+except Exception:
+    pass
+
+if not os.getenv("NVIDIA_API_KEY"):
+    print("⚠ NVIDIA_API_KEY not set. Individual agent response debug may not function correctly.")
 
 # Add path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

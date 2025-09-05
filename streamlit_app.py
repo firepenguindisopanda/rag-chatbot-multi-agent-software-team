@@ -1,7 +1,7 @@
 """Streamlit version of the RAG PDF Server UI previously implemented with Gradio.
 
 Features migrated:
-- Chat (Basic / RAG)
+# Chat (Basic / RAG)
 - PDF Upload (single + batch) with summary + suggested questions
 - Quiz generation & answer evaluation
 - Multi-Agent Software Team generation & save
@@ -63,10 +63,6 @@ from chat_with_data.enhanced_langgraph_agents import (
 )
 from chat_with_data.data_processor import DataProcessor
 from chat_with_data.vectorstore_manager import DataVectorStoreManager
-
-################################################################################################
-# Utility wrappers
-################################################################################################
 
 def pdf_uploader_streamlit(uploaded_file):
     """Wrapper around existing progress-enabled function to show Streamlit progress UI.
@@ -250,33 +246,85 @@ def main():
     # Software Team Tab
     with tabs[3]:
         st.subheader("Enhanced Multi-Agent Software Team")
-        desc = st.text_area("Project Description", height=180)
-        file = st.file_uploader("Context File (optional)", type=["txt", "md", "pdf", "docx"], key="proj_file")
-        if st.button("Generate Solution", type="primary"):
-            file_content = ""
-            if file:
-                try:
-                    file_content = file.read().decode(errors="ignore")
-                except Exception:
-                    pass
-            with st.spinner("Running multi-agent collaboration..."):
-                try:
-                    solution = run_fixed_enhanced_multi_agent_collaboration(llm, desc, file_content)
-                    st.session_state.solution = solution
-                except Exception as e:
-                    st.error(f"Error: {e}")
-        if "solution" in st.session_state:
-            st.markdown("### Solution Output")
-            st.markdown(st.session_state.solution)
-            if st.button("Save Solution"):
-                safe_description = "".join(c for c in (desc or "software_project")[:50] if c.isalnum() or c in (' ', '-', '_')).rstrip()
-                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"multi_agent_solution_{safe_description}_{ts}.md"
-                os.makedirs("solutions", exist_ok=True)
-                path = os.path.join("solutions", filename)
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(st.session_state.solution)
-                st.success(f"Saved to {path}")
+        # Maintain description for side-panel inserts
+        if "swteam_desc" not in st.session_state:
+            st.session_state.swteam_desc = ""
+
+        main_col, side_col = st.columns([3, 1], gap="large")
+
+        with main_col:
+            desc = st.text_area(
+                "Project Description",
+                height=200,
+                value=st.session_state.get("swteam_desc", ""),
+            )
+            # Keep session in sync for side-panel inserts
+            st.session_state["swteam_desc"] = desc
+            file = st.file_uploader("Context File (optional)", type=["txt", "md", "pdf", "docx"], key="proj_file")
+            if st.button("Generate Solution", type="primary"):
+                file_content = ""
+                if file:
+                    try:
+                        file_content = file.read().decode(errors="ignore")
+                    except Exception:
+                        pass
+                with st.spinner("Running multi-agent collaboration..."):
+                    try:
+                        solution = run_fixed_enhanced_multi_agent_collaboration(llm, st.session_state.swteam_desc, file_content)
+                        st.session_state.solution = solution
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+            if "solution" in st.session_state:
+                st.markdown("### Solution Output")
+                st.markdown(st.session_state.solution)
+                if st.button("Save Solution"):
+                    safe_description = "".join(c for c in (st.session_state.swteam_desc or "software_project")[:50] if c.isalnum() or c in (' ', '-', '_')).rstrip()
+                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    filename = f"multi_agent_solution_{safe_description}_{ts}.md"
+                    os.makedirs("solutions", exist_ok=True)
+                    path = os.path.join("solutions", filename)
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write(st.session_state.solution)
+                    st.success(f"Saved to {path}")
+
+        with side_col:
+            st.markdown("### 💡 Example Prompts")
+            st.caption("Expand and copy examples below")
+            
+            with st.expander("🌐 Task Manager Web App"):
+                st.code(
+                    "Create a task management web application for small teams with user authentication, project creation, "
+                    "task assignment, real-time collaboration (comments/mentions), and progress tracking dashboards. Include role-based access control and activity logs.",
+                    language=None
+                )
+            
+            with st.expander("🛒 E-commerce REST API"):
+                st.code(
+                    "Design a RESTful API for an e-commerce platform supporting product catalog, search, cart, checkout, payments, "
+                    "order tracking, and inventory management. Provide authentication, rate limiting, and OpenAPI docs.",
+                    language=None
+                )
+            
+            with st.expander("💪 Fitness Mobile App"):
+                st.code(
+                    "Build a fitness tracking mobile application with workout logging, progress visualization, social sharing, goals, "
+                    "and integration with wearable devices. Include reminders and offline sync.",
+                    language=None
+                )
+            
+            with st.expander("📡 IoT Ingestion Pipeline"):
+                st.code(
+                    "Implement an IoT data ingestion pipeline handling device telemetry at scale with ingestion, validation, time-series storage, "
+                    "stream processing (anomaly detection), and a dashboard for real-time monitoring.",
+                    language=None
+                )
+            
+            with st.expander("🏢 Microservices Booking System"):
+                st.code(
+                    "Develop a microservices-based booking system (search, reservation, payments, notifications) with saga pattern, "
+                    "idempotency, and observability (metrics, tracing, logs). Provide deployment and scaling strategy.",
+                    language=None
+                )
 
     ################################################################################################
     # RAG Evaluation Tab

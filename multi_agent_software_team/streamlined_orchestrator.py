@@ -224,7 +224,7 @@ class StreamlinedSoftwareTeamOrchestrator:
             }
             
             # Execute workflow
-            final_state = self.team_graph.invoke(initial_state)
+            final_state = self.team_graph.invoke(initial_state, config={"recursion_limit": 100})
             
             # Format results
             if final_state.get("error"):

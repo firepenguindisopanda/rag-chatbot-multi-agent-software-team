@@ -8,8 +8,15 @@ import sys
 import logging
 from datetime import datetime
 
-# Set environment
-os.environ["NVIDIA_API_KEY"] = "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"
+# Load environment variables instead of hardcoding secrets
+try:
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv()
+except Exception:
+    pass
+
+if not os.getenv("NVIDIA_API_KEY"):
+    print("⚠ NVIDIA_API_KEY not set. Handoff test may fail due to missing LLM access.")
 
 # Add path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -64,9 +71,9 @@ def test_handoff_mechanism():
         )
         
         print("📝 Starting collaboration...")
-        result = orchestrator.collaborate_on_project(project_request)
-        
-        print(f"\n📊 Execution Results:")
+    result = orchestrator.collaborate_on_project(project_request)
+
+    print("\n📊 Execution Results:")
         print(f"Success: {result.get('success')}")
         print(f"Status: {result.get('status')}")
         print(f"Error: {result.get('error', 'None')}")
@@ -74,7 +81,7 @@ def test_handoff_mechanism():
         print(f"Agent Outputs: {len(result.get('agent_outputs', {}))}")
         
         if result.get('agent_outputs'):
-            print(f"\n👥 Agent Contributions:")
+            print("\n👥 Agent Contributions:")
             for agent_name, outputs in result.get('agent_outputs', {}).items():
                 total_length = sum(len(output) for output in outputs)
                 print(f"  - {agent_name}: {len(outputs)} messages, {total_length} chars")
@@ -83,8 +90,8 @@ def test_handoff_mechanism():
                     first_msg = outputs[0][:100] + ('...' if len(outputs[0]) > 100 else '')
                     print(f"    First: {first_msg}")
         
-        output = result.get('output', '')
-        print(f"\n📄 Output Summary:")
+    output = result.get('output', '')
+    print("\n📄 Output Summary:")
         print(f"Total Length: {len(output)} characters")
         if len(output) > 0:
             print(f"Preview:\n{output[:500]}...")

@@ -6,8 +6,15 @@ Debug the agent result structure to understand the handoff issue
 import os
 import sys
 
-# Set environment
-os.environ["NVIDIA_API_KEY"] = "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"
+# Load environment variables (supports .env) without hardcoding secrets
+try:
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv()
+except Exception:
+    pass
+
+if not os.getenv("NVIDIA_API_KEY"):
+    print("⚠ NVIDIA_API_KEY not set. This debug script will attempt to run but LLM calls may fail or use a mock.")
 
 # Add path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -41,30 +48,30 @@ def test_agent_result_structure():
         input_state = {
             "messages": [("user", "Create a simple hello world web application with user login")]
         }
-        
+
         print("🧪 Invoking Product Owner agent...")
         result = po_agent.invoke(input_state)
-        
-        print(f"📊 Result structure:")
+
+        print("📊 Result structure:")
         print(f"Type: {type(result)}")
         print(f"Keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
-        
+
         if "messages" in result:
             messages = result["messages"]
             print(f"Messages count: {len(messages)}")
             print(f"Messages types: {[type(msg) for msg in messages]}")
-            
+
             # Check the last message
             if messages:
                 last_msg = messages[-1]
                 print(f"Last message type: {type(last_msg)}")
                 print(f"Last message attributes: {dir(last_msg) if hasattr(last_msg, '__dict__') else 'No attributes'}")
-                
+
                 if hasattr(last_msg, 'content'):
                     content = last_msg.content
                     print(f"Content length: {len(content)}")
                     print(f"Content ends with: ...{content[-200:]}")
-                    
+
                     # Test handoff detection
                     if "HANDOFF TO ANALYST" in content.upper():
                         print("✅ Handoff signal found in content")

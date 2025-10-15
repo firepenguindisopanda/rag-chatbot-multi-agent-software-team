@@ -71,6 +71,10 @@ from chat_with_data.enhanced_langgraph_agents import EnhancedLangGraphDataAnalys
 from chat_with_data.vectorstore_manager import DataVectorStoreManager
 from chat_with_data.data_processor import DataProcessor
 
+# Assignment Evaluator
+from assignment_evaluator.evaluator import grade_submission
+from assignment_evaluator.rubric import load_rubric
+
 def get_traceback(e):
     lines = traceback.format_exception(type(e), e, e.__traceback__)
     return ''.join(lines)
@@ -1799,6 +1803,41 @@ async def read_root():
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
+
+@app.post("/upload_assignment/")
+async def upload_assignment_endpoint(submission_zip: UploadFile = File(...), rubric_file: UploadFile = File(None)):
+    """Accept a zip of student code + rubric and return evaluation report JSON."""
+    if not submission_zip.filename.lower().endswith('.zip'):
+        return JSONResponse(
+            status_code=400,
+            content={"message": "Submission must be a ZIP file"}
+        )
+    
+    temp_dir = tempfile.mkdtemp()
+    zip_path = os.path.join(temp_dir, submission_zip.filename)
+    
+    try:
+        with open(zip_path, "wb") as buffer:
+            shutil.copyfileobj(submission_zip.file, buffer)
+        
+        rubric = {}
+        if rubric_file:
+            rubric_path = os.path.join(temp_dir, rubric_file.filename)
+            with open(rubric_path, "wb") as buffer:
+                shutil.copyfileobj(rubric_file.file, buffer)
+            rubric = load_rubric(rubric_path)
+        
+        result = grade_submission(zip_path, rubric, llm)
+        shutil.rmtree(temp_dir)
+        return result
+    except Exception as e:
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+        logger.error(f"Error processing assignment: {get_traceback(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"message": f"Error processing assignment: {str(e)}"}
+        )
 
 # Mount Gradio at /gradio path to avoid conflicts
 app = gr.mount_gradio_app(app, demo, path="/gradio")

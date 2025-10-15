@@ -29,6 +29,11 @@ from typing import List, Tuple
 
 import streamlit as st
 
+# Additional imports for assignment evaluator
+import json
+import tempfile
+from pathlib import Path
+
 # Import functions & globals from rag_pdf_server (we reuse logic without re-writing)
 # If rag_pdf_server imports gradio, that's fine; we only call its pure functions.
 from rag_pdf_server import (
@@ -63,6 +68,10 @@ from chat_with_data.enhanced_langgraph_agents import (
 )
 from chat_with_data.data_processor import DataProcessor
 from chat_with_data.vectorstore_manager import DataVectorStoreManager
+
+# Assignment Evaluator
+from assignment_evaluator.evaluator import grade_submission
+from assignment_evaluator.rubric import load_rubric, validate_rubric
 
 def pdf_uploader_streamlit(uploaded_file):
     """Wrapper around existing progress-enabled function to show Streamlit progress UI.
@@ -119,7 +128,7 @@ def main():
 
     # Global tabs
     tabs = st.tabs([
-        "💬 Chat", "📄 Upload PDF", "🧠 Quiz", "🤖 Software Team", "🛠️ Evaluate RAG", "📊 Data Chat"
+        "💬 Chat", "📄 Upload PDF", "🧠 Quiz", "🤖 Software Team", "🛠️ Evaluate RAG", "📊 Data Chat", "📝 Assignment Evaluator"
     ])
 
     ################################################################################################
@@ -416,6 +425,292 @@ def main():
                 st.info("Dataset loaded. Ask questions below.")
             else:
                 st.info("Analyze data first to enable chat.")
+
+    ################################################################################################
+    # Assignment Evaluator Tab
+    with tabs[6]:
+        st.header("📝 Assignment Evaluator (Bulk Code Analysis)")
+        st.markdown("*Upload student code submissions and rubrics for automated evaluation and AI-generated code detection*")
+
+        col1, col2 = st.columns([1, 1])
+
+        with col1:
+            st.subheader("📁 Upload Files")
+            uploaded_zip = st.file_uploader(
+                "Student Code Submission (ZIP)",
+                type=["zip"],
+                help="Upload a ZIP file containing student code files (.py, .java, .js, .cpp, .c, .ts)"
+            )
+
+            rubric_option = st.radio(
+                "Rubric Source",
+                ["Upload JSON/YAML File", "Paste JSON Text"],
+                help="Choose how to provide the evaluation rubric"
+            )
+
+            rubric = None
+            if rubric_option == "Upload JSON/YAML File":
+                uploaded_rubric = st.file_uploader(
+                    "Evaluation Rubric (JSON/YAML)",
+                    type=["json", "yaml", "yml"],
+                    help="Upload a rubric file defining evaluation criteria and weights"
+                )
+                if uploaded_rubric:
+                    try:
+                        rubric_content = uploaded_rubric.read().decode("utf-8")
+                        if uploaded_rubric.name.endswith((".yaml", ".yml")):
+                            import yaml
+                            rubric = yaml.safe_load(rubric_content)
+                        else:
+                            rubric = json.loads(rubric_content)
+                        st.success("✅ Rubric loaded successfully")
+                    except Exception as e:
+                        st.error(f"❌ Failed to parse rubric: {e}")
+            else:
+                rubric_text = st.text_area(
+                    "Rubric JSON",
+                    value="",  # Explicitly set empty value
+                    height=200,
+                    placeholder='''Example rubric format:
+{
+  "correctness": {
+    "description": "Correctness of the solution implementation",
+    "weight": 0.4
+  },
+  "code_quality": {
+    "description": "Code readability, structure, and best practices",
+    "weight": 0.3
+  },
+  "documentation": {
+    "description": "Comments, docstrings, and code documentation",
+    "weight": 0.2
+  },
+  "testing": {
+    "description": "Unit tests and test coverage",
+    "weight": 0.1
+  }
+}''',
+                    help="Paste your evaluation rubric as valid JSON"
+                )
+                if rubric_text.strip():
+                    try:
+                        rubric = json.loads(rubric_text)
+                        st.success("✅ Rubric parsed successfully")
+                    except Exception as e:
+                        st.error(f"❌ Invalid JSON: {e}")
+                        rubric = None
+                else:
+                    st.info("ℹ️ Please paste your rubric JSON above")
+
+        with col2:
+            st.subheader("📊 Evaluation Results")
+
+            # Validation checks
+            can_analyze = True
+            if not uploaded_zip:
+                st.warning("⚠️ Please upload a ZIP file with student code")
+                can_analyze = False
+            if not rubric:
+                st.warning("⚠️ Please provide a valid rubric")
+                can_analyze = False
+
+            if can_analyze:
+                if st.button("🔍 Analyze Submission", type="primary", use_container_width=True):
+                    with st.spinner("Processing submission..."):
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
+
+                        try:
+                            # Step 1: Save uploaded files temporarily
+                            progress_bar.progress(10, text="Saving files...")
+                            with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as zf:
+                                zf.write(uploaded_zip.read())
+                                zf.flush()
+                                zip_path = zf.name
+
+                            # Step 2: Run evaluation
+                            progress_bar.progress(50, text="Running evaluation...")
+                            report = grade_submission(zip_path, rubric, llm)
+
+                            # Step 3: Display results
+                            progress_bar.progress(100, text="Complete!")
+                            status_text.success("✅ Analysis complete!")
+
+                            # Clean up
+                            os.unlink(zip_path)
+
+                            # Store results in session state for download
+                            st.session_state.evaluation_report = report
+                            st.session_state.rubric_used = rubric
+
+                        except Exception as e:
+                            st.error(f"❌ Analysis failed: {e}")
+                            progress_bar.empty()
+                            status_text.empty()
+                            can_analyze = False
+
+            # Display results if available
+            if "evaluation_report" in st.session_state:
+                report = st.session_state.evaluation_report
+
+                # Summary metrics
+                st.subheader("📈 Summary")
+                total_criteria = len(report["results"])
+                ai_suspected = len(report["ai_flags"]["suspected_files"])
+
+                col_a, col_b, col_c = st.columns(3)
+                with col_a:
+                    st.metric("Criteria Evaluated", total_criteria)
+                with col_b:
+                    avg_score = sum(
+                        result["llm_result"]["score"]
+                        for result in report["results"].values()
+                    ) / total_criteria if total_criteria > 0 else 0
+                    st.metric("Average Score", f"{avg_score:.1f}")
+                with col_c:
+                    st.metric("AI-Generated Flags", ai_suspected)
+
+                # Detailed results
+                st.subheader("📋 Detailed Evaluation")
+
+                for crit_key, result in report["results"].items():
+                    with st.expander(f"🎯 {crit_key.replace('_', ' ').title()}", expanded=True):
+                        col1, col2 = st.columns([1, 3])
+
+                        with col1:
+                            score = result["llm_result"]["score"]
+                            st.metric("Score", f"{score}/100")
+
+                            # Color-coded score indicator
+                            if score >= 80:
+                                st.success("Excellent")
+                            elif score >= 60:
+                                st.warning("Good")
+                            else:
+                                st.error("Needs Improvement")
+
+                        with col2:
+                            st.markdown(f"**Description:** {result['rubric']['description']}")
+                            st.markdown(f"**Weight:** {result['rubric'].get('weight', 'N/A')}")
+
+                    # AI Evaluation outside the main expander to avoid nesting
+                    st.markdown(f"**🤖 AI Evaluation for {crit_key.replace('_', ' ').title()}:**")
+                    with st.expander(f"View AI Analysis for {crit_key.replace('_', ' ').title()}", expanded=False):
+                        st.write(result["llm_result"]["explanation"])
+
+                    # Static Analysis outside the main expander to avoid nesting
+                    if result.get("static"):
+                        st.markdown(f"**🔍 Static Analysis for {crit_key.replace('_', ' ').title()}:**")
+                        with st.expander(f"View Static Analysis for {crit_key.replace('_', ' ').title()}", expanded=False):
+                            st.json(result["static"])
+
+                # AI Detection Results
+                st.subheader("🕵️ AI Detection Analysis")
+
+                if report["ai_flags"]["suspected_files"]:
+                    st.warning(f"🚨 {ai_suspected} file(s) flagged as potentially AI-generated")
+
+                    for flag in report["ai_flags"]["reasons"]:
+                        confidence = report["ai_flags"]["confidence_scores"].get(flag["file"], 0)
+                        st.error(f"**{Path(flag['file']).name}** (Confidence: {confidence:.1%})")
+                        st.write(f"*{flag['reason']}*")
+
+                        # Show stylometric features if available
+                        if "features" in flag:
+                            with st.expander(f"📊 Stylometric Features for {Path(flag['file']).name}"):
+                                features = flag["features"]
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.metric("Comment Ratio", f"{features.get('comment_ratio', 0):.1%}")
+                                    st.metric("Avg Line Length", f"{features.get('avg_line_length', 0):.1f}")
+                                with col2:
+                                    st.metric("Variable Diversity", f"{features.get('var_name_diversity', 0):.1%}")
+                                    st.metric("Generic Functions", f"{features.get('generic_func_ratio', 0):.1%}")
+                else:
+                    st.success("✅ No AI-generated code patterns detected with high confidence")
+
+                # Show confidence scores for all files
+                if report["ai_flags"]["confidence_scores"]:
+                    with st.expander("📈 AI Confidence Scores for All Files", expanded=True):
+                        for file_path, confidence in report["ai_flags"]["confidence_scores"].items():
+                            if confidence < 0.3:
+                                confidence_color = "🟢"
+                            elif confidence < 0.7:
+                                confidence_color = "🟡"
+                            else:
+                                confidence_color = "🔴"
+
+                            # Find detailed info for this file
+                            detailed_info = None
+                            for reason in report["ai_flags"]["reasons"]:
+                                if reason["file"] == file_path:
+                                    detailed_info = reason
+                                    break
+
+                            with st.container():
+                                st.write(f"{confidence_color} **{Path(file_path).name}**: {confidence:.1%} AI confidence")
+
+                                if detailed_info:
+                                    # Show breakdown if available
+                                    with st.expander(f"🔍 Detailed Analysis for {Path(file_path).name}", expanded=False):
+                                        col1, col2 = st.columns(2)
+
+                                        with col1:
+                                            st.metric("Heuristic Confidence",
+                                                    f"{detailed_info.get('heuristic_confidence', 0):.1%}")
+                                            st.metric("LLM Confidence",
+                                                    f"{detailed_info.get('llm_confidence', 0):.1%}")
+
+                                        with col2:
+                                            st.metric("Combined Confidence", f"{confidence:.1%}")
+
+                                        # Show LLM reasoning if available
+                                        if detailed_info.get('llm_reasoning'):
+                                            st.subheader("🤖 LLM Analysis")
+                                            st.write(detailed_info['llm_reasoning'])
+
+                                        # Show stylometric features
+                                        if "features" in detailed_info:
+                                            st.subheader("📊 Stylometric Features")
+                                            features = detailed_info["features"]
+                                            feat_col1, feat_col2 = st.columns(2)
+                                            with feat_col1:
+                                                st.metric("Comment Ratio", f"{features.get('comment_ratio', 0):.1%}")
+                                                st.metric("Avg Line Length", f"{features.get('avg_line_length', 0):.1f}")
+                                            with feat_col2:
+                                                st.metric("Variable Diversity", f"{features.get('var_name_diversity', 0):.1%}")
+                                                st.metric("Generic Functions", f"{features.get('generic_func_ratio', 0):.1%}")
+                                else:
+                                    # For files with low confidence, still show basic info
+                                    st.caption("Low confidence - detailed analysis not shown")
+
+                # Download options
+                st.subheader("💾 Export Results")
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    # JSON download
+                    json_data = json.dumps(report, indent=2)
+                    st.download_button(
+                        label="📄 Download JSON Report",
+                        data=json_data,
+                        file_name="evaluation_report.json",
+                        mime="application/json",
+                        use_container_width=True
+                    )
+
+                with col2:
+                    # PDF download (placeholder - would need reportlab or similar)
+                    st.button(
+                        "📕 Download PDF Report",
+                        disabled=True,
+                        help="PDF export coming soon",
+                        use_container_width=True
+                    )
+
+                # Raw data view
+                with st.expander("🔧 Raw Report Data"):
+                    st.json(report)
 
 if __name__ == "__main__":
     main()

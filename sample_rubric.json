@@ -1,0 +1,101 @@
+{
+  "total_points": 50,
+  "partial_credit_policy": {
+    "description": "If output is incorrect, award up to 60% of marks in that category for reasonable programming statements. Use grader judgement for minor/partial/mostly incorrect cases.",
+    "max_fraction_for_incorrect_output": 0.6
+  },
+  "invoice": {
+    "description": "Invoice calculations and input/display (35 marks).",
+    "weight": 0.7,
+    "subcriteria": {
+      "correct_input_of_five_values": {
+        "description": "Correct input of five values",
+        "points": 5,
+        "weight_within_invoice": 0.142857,
+        "auto_evaluable": true
+      },
+      "general_structure_of_invoice": {
+        "description": "General structure of invoice (format/sections). Ignore minor alignment issues.",
+        "points": 5,
+        "weight_within_invoice": 0.142857,
+        "auto_evaluable": false
+      },
+      "correct_calculation_tiles_required": {
+        "description": "Correct calculation of tiles required",
+        "points": 10,
+        "weight_within_invoice": 0.285714,
+        "auto_evaluable": true
+      },
+      "correct_calculation_grout_required": {
+        "description": "Correct calculation of grout required",
+        "points": 5,
+        "weight_within_invoice": 0.142857,
+        "auto_evaluable": true
+      },
+      "correct_calculation_thinset_required": {
+        "description": "Correct calculation of thinset required",
+        "points": 5,
+        "weight_within_invoice": 0.142857,
+        "auto_evaluable": true
+      },
+      "correct_calculation_summary_total_vat_bill": {
+        "description": "Correct calculation of summary (total, VAT, bill amount)",
+        "points": 5,
+        "weight_within_invoice": 0.142857,
+        "auto_evaluable": true
+      }
+    }
+  },
+  "delivery_schedule": {
+    "description": "Delivery schedule display and base charge (10 marks).",
+    "weight": 0.2,
+    "subcriteria": {
+      "correct_input_of_base_charge": {
+        "description": "Correct input of base charge",
+        "points": 1,
+        "weight_within_delivery": 0.1,
+        "auto_evaluable": true
+      },
+      "correct_table_heading": {
+        "description": "Correct table heading for schedule",
+        "points": 2,
+        "weight_within_delivery": 0.2,
+        "auto_evaluable": false
+      },
+      "correct_display_of_delivery_schedule": {
+        "description": "Correct display of delivery schedule (ignore alignment issues)",
+        "points": 7,
+        "weight_within_delivery": 0.7,
+        "auto_evaluable": false
+      }
+    }
+  },
+  "programming_style": {
+    "description": "Style: spacing, comments, variable names (5 marks).",
+    "weight": 0.1,
+    "subcriteria": {
+      "spaces_and_indentation": {
+        "description": "Good use of spaces and indentation",
+        "points": 2,
+        "weight_within_style": 0.4,
+        "auto_evaluable": false
+      },
+      "use_of_comments": {
+        "description": "Use of comments (not necessarily verbose)",
+        "points": 1,
+        "weight_within_style": 0.2,
+        "auto_evaluable": false
+      },
+      "good_choice_of_variable_names": {
+        "description": "Good choice of variable names",
+        "points": 2,
+        "weight_within_style": 0.4,
+        "auto_evaluable": false
+      }
+    }
+  },
+  "grading_notes": {
+    "marks_awarded_for_incorrect_output": "Award up to ~60% of marks in a category if output is incorrect but reasoning/code is reasonable. Example guidance: minor error caused by previous calculation -> ~60% of that category; partially correct statements -> 40-60%; mostly incorrect -> ~20%; total incorrect/absent -> 0.",
+    "citation": "COMP1601 Assignment #1 Mark Scheme (2025/2026 Semester 1)."
+  }
+}

@@ -22,3 +22,5 @@ plotly
 openpyxl
 xlrd
 scikit-learn
+gspread
+google-auth

@@ -73,6 +73,10 @@ from chat_with_data.vectorstore_manager import DataVectorStoreManager
 from assignment_evaluator.evaluator import grade_submission
 from assignment_evaluator.rubric import load_rubric, validate_rubric
 
+# Google Sheets helper (optional)
+from assignment_evaluator.google_sheets import SheetsClient, check_gspread_available
+from modals import show_sheets_settings_modal
+
 def pdf_uploader_streamlit(uploaded_file):
     """Wrapper around existing progress-enabled function to show Streamlit progress UI.
     We mimic pdf_uploader_with_progress stages using st.progress and then call process_pdf directly.
@@ -442,6 +446,26 @@ def main():
                 help="Upload a ZIP file containing student code files (.py, .java, .js, .cpp, .c, .ts)"
             )
 
+            # Toggle for RAG context with master code
+            use_master_code = st.checkbox(
+                "🔍 Enable RAG Context (Master Code Comparison)",
+                value=False,
+                help="Upload instructor's reference code to provide contextual evaluation against model solutions"
+            )
+
+            # Master code upload for RAG context (only shown when toggle is enabled)
+            master_code_file = None
+            if use_master_code:
+                master_code_file = st.file_uploader(
+                    "Master Code (Reference Implementation)",
+                    type=["py", "java", "js", "cpp", "c", "ts", "cs", "php", "rb", "go", "rs"],
+                    help="Upload instructor's master/reference code to provide contextual evaluation against model solutions"
+                )
+                if master_code_file:
+                    st.success("✅ Master code uploaded - evaluations will include contextual comparison")
+                else:
+                    st.info("ℹ️ Upload master code to enable contextual evaluation against model solutions")
+
             rubric_option = st.radio(
                 "Rubric Source",
                 ["Upload JSON/YAML File", "Paste JSON Text"],
@@ -502,6 +526,10 @@ def main():
                 else:
                     st.info("ℹ️ Please paste your rubric JSON above")
 
+            # Make Sheets settings available before evaluation: open modal from upload column
+            if st.button("Open Sheets Settings", key="open_sheets_settings_pre"):
+                show_sheets_settings_modal(prefix='pre')
+
         with col2:
             st.subheader("📊 Evaluation Results")
 
@@ -512,6 +540,11 @@ def main():
                 can_analyze = False
             if not rubric:
                 st.warning("⚠️ Please provide a valid rubric")
+                can_analyze = False
+
+            # Check master code requirement only if toggle is enabled
+            if use_master_code and not master_code_file:
+                st.warning("⚠️ Please upload master code or disable RAG context")
                 can_analyze = False
 
             if can_analyze:
@@ -528,9 +561,17 @@ def main():
                                 zf.flush()
                                 zip_path = zf.name
 
+                            # Save master code if provided
+                            master_code_path = None
+                            if master_code_file:
+                                with tempfile.NamedTemporaryFile(delete=False, suffix=Path(master_code_file.name).suffix) as mf:
+                                    mf.write(master_code_file.read())
+                                    mf.flush()
+                                    master_code_path = mf.name
+
                             # Step 2: Run evaluation
                             progress_bar.progress(50, text="Running evaluation...")
-                            report = grade_submission(zip_path, rubric, llm)
+                            report = grade_submission(zip_path, rubric, llm, master_code_path)
 
                             # Step 3: Display results
                             progress_bar.progress(100, text="Complete!")
@@ -538,10 +579,13 @@ def main():
 
                             # Clean up
                             os.unlink(zip_path)
+                            if master_code_path:
+                                os.unlink(master_code_path)
 
                             # Store results in session state for download
                             st.session_state.evaluation_report = report
                             st.session_state.rubric_used = rubric
+                            st.session_state.master_context_used = master_code_path is not None
 
                         except Exception as e:
                             st.error(f"❌ Analysis failed: {e}")
@@ -569,6 +613,12 @@ def main():
                     st.metric("Average Score", f"{avg_score:.1f}")
                 with col_c:
                     st.metric("AI-Generated Flags", ai_suspected)
+
+                # Show RAG context status
+                if "master_context_used" in st.session_state and st.session_state.master_context_used:
+                    st.success("🔍 **RAG Context Enabled**: Evaluation included comparison with master code")
+                else:
+                    st.info("📝 **Standard Evaluation**: No master code context used")
 
                 # Detailed results
                 st.subheader("📋 Detailed Evaluation")
@@ -684,10 +734,16 @@ def main():
                                     # For files with low confidence, still show basic info
                                     st.caption("Low confidence - detailed analysis not shown")
 
-                # Download options
+                # Callout banner: advisory about evaluation and AI detection
+                st.warning(
+                    "⚠️ Advisory: This tool provides automated evaluation and AI-generated code detection as an assistive aid. "
+                    "Results are advisory only — please review evaluations and AI detection flags manually before taking any action."
+                )
+
+                # Download & Export options
                 st.subheader("💾 Export Results")
 
-                col1, col2 = st.columns(2)
+                col1, col2 = st.columns([1, 1])
                 with col1:
                     # JSON download
                     json_data = json.dumps(report, indent=2)
@@ -707,6 +763,64 @@ def main():
                         help="PDF export coming soon",
                         use_container_width=True
                     )
+
+
+                # Google Sheets export - settings modal
+                st.markdown("---")
+                st.markdown("### ➕ Export to Google Sheets (optional)")
+
+                # Default session keys for sheets settings and mapping
+                st.session_state.setdefault('gs_service_account', st.session_state.get('gs_service_account', ''))
+                st.session_state.setdefault('gs_spreadsheet_id', st.session_state.get('gs_spreadsheet_id', ''))
+                st.session_state.setdefault('gs_worksheet', st.session_state.get('gs_worksheet', 'Sheet1'))
+                st.session_state.setdefault('gs_column_mapping', st.session_state.get('gs_column_mapping', '{"student_id":"submission.student_id","filename":"file","avg_score":"avg_score"}'))
+
+                cols = st.columns([2, 1, 1])
+                with cols[0]:
+                    st.text_input("Spreadsheet ID", value=st.session_state.gs_spreadsheet_id, key="gs_spreadsheet_id")
+                with cols[1]:
+                    st.text_input("Worksheet name", value=st.session_state.gs_worksheet, key="gs_worksheet")
+                with cols[2]:
+                    if not check_gspread_available():
+                        st.caption("gspread not installed")
+
+                # Settings form trigger (uses reusable form in modals.py)
+                settings_col, action_col = st.columns([3, 1])
+                with settings_col:
+                    if st.button("Open Sheets Settings"):
+                        show_sheets_settings_modal(prefix='modal')
+
+                with action_col:
+                    if st.button("Save report to Google Sheets"):
+                        # Attempt per-student export using mapping
+                        try:
+                            if not check_gspread_available():
+                                st.error("gspread/google-auth are not available in this runtime")
+                            else:
+                                info = json.loads(st.session_state.gs_service_account)
+                                client = SheetsClient.from_service_account_info(info)
+                                # Validate spreadsheet access first
+                                sid = st.session_state.gs_spreadsheet_id
+                                if not client.validate_spreadsheet_access(sid):
+                                    st.error("Service account cannot access spreadsheet. Run preflight check in settings.")
+                                else:
+                                    # Prepare a simple normalized report context
+                                    avg_score = sum(r['llm_result']['score'] for r in report['results'].values()) / max(1, len(report['results']))
+                                    report_context = dict(report)
+                                    report_context['avg_score'] = avg_score
+                                    # Derive files list if available
+                                    # Column mapping
+                                    try:
+                                        mapping = json.loads(st.session_state.gs_column_mapping)
+                                    except Exception:
+                                        st.error("Invalid column mapping JSON. Open settings to fix.")
+                                        mapping = None
+
+                                    if mapping:
+                                        client.append_student_rows(sid, st.session_state.gs_worksheet, report_context, mapping)
+                                        st.success("✅ Saved rows to Google Sheets")
+                        except Exception as e:
+                            st.error(f"Failed to save report to Google Sheets: {e}")
 
                 # Raw data view
                 with st.expander("🔧 Raw Report Data"):

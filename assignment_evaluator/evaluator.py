@@ -56,7 +56,7 @@ def prepare_code_chunks(file_paths: List[str]) -> List[Dict[str, Any]]:
             chunks.append({"path": fp, "text": chunk_text, "start_line": i+1})
     return chunks
 
-def grade_submission(zip_path: str, rubric: Dict[str, Any], llm=None) -> Dict[str, Any]:
+def grade_submission(zip_path: str, rubric: Dict[str, Any], llm=None, master_code_path: str = None) -> Dict[str, Any]:
     """High-level grading: index code, run rubric checks via RAG/LLM and static heuristics."""
     # Get LLM if not provided
     if llm is None:
@@ -71,10 +71,18 @@ def grade_submission(zip_path: str, rubric: Dict[str, Any], llm=None) -> Dict[st
         # Extract grading criteria from complex rubric structure
         grading_criteria = extract_grading_criteria(rubric)
 
+        # Initialize master code context if provided
+        master_context = None
+        if master_code_path and os.path.exists(master_code_path):
+            master_context = load_and_index_master_code(master_code_path)
+            # Add relevant chunks to context for use in prompts
+            if master_context:
+                master_context['relevant_chunks'] = get_relevant_master_chunks(master_context)
+
         # Evaluate each grading criterion
         results = {}
         for crit_key, crit in grading_criteria.items():
-            results[crit_key] = evaluate_criterion(crit, files, static_results.get(crit_key), llm)
+            results[crit_key] = evaluate_criterion(crit, files, static_results.get(crit_key), llm, master_context)
 
         # AI-detection
         ai_flags = detect_ai_generated(files, llm)
@@ -135,10 +143,10 @@ def build_subcriteria_description(subcriteria: Dict[str, Any]) -> str:
     return "\n".join(descriptions)
 
 
-def evaluate_criterion(criterion: Dict[str, Any], files: List[str], static_result: Any = None, llm=None) -> Dict[str, Any]:
+def evaluate_criterion(criterion: Dict[str, Any], files: List[str], static_result: Any = None, llm=None, master_context: Dict[str, Any] = None) -> Dict[str, Any]:
     """Evaluate a single rubric criterion using LLM or fallback."""
     if llm is not None:
-        llm_result = evaluate_with_llm(criterion, files, llm)
+        llm_result = evaluate_with_llm(criterion, files, llm, master_context)
     else:
         llm_result = {"score": 50, "explanation": "LLM not available - using default score"}
 
@@ -149,9 +157,9 @@ def evaluate_criterion(criterion: Dict[str, Any], files: List[str], static_resul
     }
 
 
-def evaluate_with_llm(criterion: Dict[str, Any], files: List[str], llm) -> Dict[str, Any]:
+def evaluate_with_llm(criterion: Dict[str, Any], files: List[str], llm, master_context: Dict[str, Any] = None) -> Dict[str, Any]:
     """Use LLM to evaluate a rubric criterion."""
-    prompt = build_evaluation_prompt(criterion, files)
+    prompt = build_evaluation_prompt(criterion, files, master_context)
 
     try:
         response = llm.invoke(prompt).content
@@ -160,7 +168,7 @@ def evaluate_with_llm(criterion: Dict[str, Any], files: List[str], llm) -> Dict[
         return {"score": 0, "explanation": f"LLM evaluation failed: {str(e)}"}
 
 
-def build_evaluation_prompt(criterion: Dict[str, Any], files: List[str]) -> str:
+def build_evaluation_prompt(criterion: Dict[str, Any], files: List[str], master_context: Dict[str, Any] = None) -> str:
     """Build the LLM prompt for rubric evaluation."""
     code_samples = []
     for f in files[:3]:  # Limit to first 3 files
@@ -170,16 +178,28 @@ def build_evaluation_prompt(criterion: Dict[str, Any], files: List[str]) -> str:
         except Exception:
             continue
 
-    return f"""Evaluate the following code submission for the criterion: {criterion.get('description', 'General quality')}
+    base_prompt = f"""Evaluate the following code submission for the criterion: {criterion.get('description', 'General quality')}
 
 Please analyze the code and provide:
 1. A score from 0-100 (where 100 is excellent)
 2. A brief explanation of your evaluation
 
 Code files in submission:
-{chr(10).join(code_samples)}
+{chr(10).join(code_samples)}"""
 
-Score and explanation:"""
+    # Add master code context if available
+    if master_context and master_context.get('relevant_chunks'):
+        master_code_section = f"""
+
+For context, here are relevant excerpts from the instructor's model solution that may be helpful for comparison:
+
+{master_context['relevant_chunks']}
+
+When evaluating, consider how the student's approach compares to the model solution, but remember that different valid approaches should still receive appropriate credit."""
+
+        base_prompt += master_code_section
+
+    return base_prompt + "\n\nScore and explanation:"
 
 
 def parse_llm_response(response: str) -> Dict[str, Any]:
@@ -209,6 +229,33 @@ def run_static_checks(file_paths: List[str]) -> Dict[str, Any]:
         if "TODO" in text:
             findings.setdefault("notes", []).append({"file": fp, "note": "Contains TODOs"})
     return findings
+
+def assess_ai_confidence(features: Dict[str, float]) -> float:
+    """Assess AI confidence based on stylometric features."""
+    confidence = 0.0
+
+    # High comment ratio often indicates AI-generated code
+    if features["comment_ratio"] > 0.3:
+        confidence += 0.3
+
+    # Very consistent line lengths may indicate AI
+    if features["avg_line_length"] > 80:
+        confidence += 0.2
+
+    # Low variable name diversity may indicate AI
+    if features["var_name_diversity"] < 0.1:
+        confidence += 0.2
+
+    # High ratio of generic function names
+    if features["generic_func_ratio"] > 0.5:
+        confidence += 0.2
+
+    # High string literal ratio
+    if features["string_literal_ratio"] > 0.1:
+        confidence += 0.1
+
+    return min(confidence, 1.0)
+
 
 def detect_ai_generated(file_paths: List[str], llm=None) -> Dict[str, Any]:
     """Combine heuristics + LLM classifier to flag likely AI-generated code."""
@@ -333,28 +380,139 @@ def calculate_stylometric_features(code: str) -> Dict[str, float]:
     return features
 
 
-def assess_ai_confidence(features: Dict[str, float]) -> float:
-    """Assess confidence that code is AI-generated based on stylometric features."""
-    confidence = 0.0
+def load_and_index_master_code(master_code_path: str) -> Dict[str, Any]:
+    """Load and index master code for contextual evaluation."""
+    try:
+        # Read the master code file
+        with open(master_code_path, 'r', encoding='utf-8', errors='ignore') as f:
+            master_code = f.read()
 
-    # High comment ratio often indicates AI-generated code
-    if features["comment_ratio"] > 0.3:
-        confidence += 0.3
+        # Split into logical chunks (functions, classes, etc.)
+        chunks = split_code_into_chunks(master_code)
 
-    # Very uniform line lengths can be suspicious
-    if 20 <= features["avg_line_length"] <= 60:
-        confidence += 0.2
+        return {
+            'full_code': master_code,
+            'chunks': chunks,
+            'filename': Path(master_code_path).name,
+            'language': detect_code_language(master_code_path)
+        }
+    except Exception as e:
+        print(f"Warning: Could not load master code from {master_code_path}: {e}")
+        return None
 
-    # Low variable name diversity
-    if features["var_name_diversity"] < 0.4:
-        confidence += 0.2
 
-    # High ratio of generic function names
-    if features["generic_func_ratio"] > 0.5:
-        confidence += 0.2
+def split_code_into_chunks(code: str) -> List[Dict[str, str]]:
+    """Split code into meaningful chunks for context."""
+    chunks = []
 
-    # Too many string literals
-    if features["string_literal_ratio"] > 0.1:
-        confidence += 0.1
+    # Split by functions/classes (basic approach)
+    lines = code.split('\n')
+    current_chunk = []
+    current_type = "general"
+    current_name = "main"
 
-    return min(confidence, 1.0)
+    for i, line in enumerate(lines):
+        line = line.strip()
+
+        # Detect function definitions
+        if line.startswith('def ') and ':' in line:
+            # Save previous chunk if it exists
+            if current_chunk:
+                chunks.append({
+                    'type': current_type,
+                    'name': current_name,
+                    'content': '\n'.join(current_chunk),
+                    'line_start': max(1, i - len(current_chunk)),
+                    'line_end': i
+                })
+
+            # Start new function chunk
+            func_name = line.split('def ')[1].split('(')[0].strip()
+            current_chunk = [line]
+            current_type = "function"
+            current_name = func_name
+
+        # Detect class definitions
+        elif line.startswith('class ') and ':' in line:
+            # Save previous chunk if it exists
+            if current_chunk:
+                chunks.append({
+                    'type': current_type,
+                    'name': current_name,
+                    'content': '\n'.join(current_chunk),
+                    'line_start': max(1, i - len(current_chunk)),
+                    'line_end': i
+                })
+
+            # Start new class chunk
+            class_name = line.split('class ')[1].split('(')[0].split(':')[0].strip()
+            current_chunk = [line]
+            current_type = "class"
+            current_name = class_name
+
+        else:
+            # Add line to current chunk
+            current_chunk.append(line)
+
+    # Add final chunk
+    if current_chunk:
+        chunks.append({
+            'type': current_type,
+            'name': current_name,
+            'content': '\n'.join(current_chunk),
+            'line_start': max(1, len(lines) - len(current_chunk)),
+            'line_end': len(lines)
+        })
+
+    return chunks
+
+
+def detect_code_language(filepath: str) -> str:
+    """Detect programming language from file extension."""
+    ext = Path(filepath).suffix.lower()
+    language_map = {
+        '.py': 'python',
+        '.java': 'java',
+        '.cpp': 'cpp',
+        '.c': 'c',
+        '.js': 'javascript',
+        '.ts': 'typescript',
+        '.cs': 'csharp',
+        '.php': 'php',
+        '.rb': 'ruby',
+        '.go': 'go',
+        '.rs': 'rust'
+    }
+    return language_map.get(ext, 'unknown')
+
+
+def get_relevant_master_chunks(master_context: Dict[str, Any], max_chunks: int = 2) -> str:
+    """Get relevant chunks from master code based on student submission."""
+    if not master_context or not master_context.get('chunks'):
+        return ""
+
+    # Simple relevance heuristic: include key functions/classes
+    relevant_chunks = []
+
+    # Prioritize functions and classes over general code
+    prioritized_chunks = [chunk for chunk in master_context['chunks']
+                         if chunk['type'] in ['function', 'class']]
+
+    # Take the most substantial chunks
+    prioritized_chunks.sort(key=lambda x: len(x['content']), reverse=True)
+
+    for chunk in prioritized_chunks[:max_chunks]:
+        chunk_text = f"**{chunk['type'].title()}: {chunk['name']}**\n```python\n{chunk['content']}\n```"
+        relevant_chunks.append(chunk_text)
+
+    if relevant_chunks:
+        return "\n\n".join(relevant_chunks)
+    else:
+        # Fallback: include first substantial chunk
+        substantial_chunks = [chunk for chunk in master_context['chunks']
+                            if len(chunk['content']) > 50]
+        if substantial_chunks:
+            chunk = substantial_chunks[0]
+            return f"**Reference Implementation:**\n```python\n{chunk['content'][:1000]}\n```"
+
+    return ""

@@ -4,6 +4,7 @@ import zipfile
 import tempfile
 import json
 import os
+import re
 
 # Remove the direct import - we'll pass LLM as parameter instead
 # Import existing LLM and vector store from the main application
@@ -84,7 +85,7 @@ def grade_submission(zip_path: str, rubric: Dict[str, Any], llm=None, master_cod
         for crit_key, crit in grading_criteria.items():
             results[crit_key] = evaluate_criterion(crit, files, static_results.get(crit_key), llm, master_context)
 
-        # AI-detection for whole submission
+        # AI-detection using advanced ensemble approach
         ai_flags = detect_ai_generated(files, llm)
 
         # Build per-file metrics so callers (and Google Sheets export) can persist one row per file
@@ -318,8 +319,15 @@ def assess_ai_confidence(features: Dict[str, float]) -> float:
     return min(confidence, 1.0)
 
 
-def detect_ai_generated(file_paths: List[str], llm=None) -> Dict[str, Any]:
-    """Combine heuristics + LLM classifier to flag likely AI-generated code."""
+def _extract_student_id_from_path(file_path: str) -> str:
+    """Extract student ID from file path."""
+    filename = Path(file_path).name
+    m = re.match(r"^(\d{9})", filename)
+    return m.group(1) if m else "unknown"
+
+
+def _fallback_ai_detection(file_paths: List[str], llm=None) -> Dict[str, Any]:
+    """Fallback to original AI detection method."""
     flags = {"suspected_files": [], "reasons": [], "confidence_scores": {}}
 
     for fp in file_paths:
@@ -577,3 +585,47 @@ def get_relevant_master_chunks(master_context: Dict[str, Any], max_chunks: int =
             return f"**Reference Implementation:**\n```python\n{chunk['content'][:1000]}\n```"
 
     return ""
+
+
+def detect_ai_generated(file_paths: List[str], llm=None) -> Dict[str, Any]:
+    """Detect AI-generated code using advanced ensemble approach."""
+    try:
+        from ai_code_detector import run_ai_detection
+
+        # For now, analyze the first file (can be extended to analyze all)
+        if not file_paths:
+            return {"suspected_files": [], "reasons": [], "confidence_scores": {}}
+
+        primary_file = file_paths[0]
+
+        # Extract student ID from filename
+        student_id = _extract_student_id_from_path(primary_file)
+
+        # Run AI detection
+        detection_result = run_ai_detection(primary_file, student_id)
+
+        if "error" in detection_result:
+            # Fallback to original heuristic method
+            return _fallback_ai_detection(file_paths, llm)
+
+        # Convert to expected format
+        final_score = detection_result.get("final_score", 0.5)
+        recommendation = detection_result.get("recommendation", "REVIEW_REQUIRED")
+
+        ai_flags = {
+            "suspected_files": [primary_file] if final_score >= 0.75 else [],
+            "reasons": [{
+                "file": primary_file,
+                "reason": f"AI-generated code detected (score: {final_score:.2f}, recommendation: {recommendation})",
+                "detection_details": detection_result
+            }] if final_score >= 0.4 else [],
+            "confidence_scores": {primary_file: final_score},
+            "advanced_detection": detection_result
+        }
+
+        return ai_flags
+
+    except Exception as e:
+        # Fallback to original method if new system fails
+        print(f"Advanced AI detection failed: {e}, falling back to heuristics")
+        return _fallback_ai_detection(file_paths, llm)

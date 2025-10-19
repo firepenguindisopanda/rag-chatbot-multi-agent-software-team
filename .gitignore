@@ -26,3 +26,4 @@ data_vectorstore_index.tgz
 # Secrets (never track API keys)
 *.key
 *.pem
+rags

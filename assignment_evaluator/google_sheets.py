@@ -26,6 +26,7 @@ except Exception:
     gspread = None  # type: ignore
     Credentials = None  # type: ignore
 
+# sheet_id = "1K75pk59biCj424T6U91HIfPP54YwOomGFUKwMOlvXJ8"
 
 class SheetsClient:
     SCOPE = [
@@ -115,8 +116,47 @@ class SheetsClient:
         except gspread.exceptions.WorksheetNotFound:
             ws = sh.add_worksheet(title=worksheet_name, rows=1000, cols=max(10, len(column_mapping)))
 
-        # Ensure header
+        # Ensure header. If the sheet is empty and the provided column_mapping is empty
+        # or too small, attempt to auto-generate mapping from report['file_metrics']
         existing = ws.get_all_values()
+
+        # If no mapping provided or mapping is very small, and file_metrics exist,
+        # build a mapping automatically from the first file_metrics entry.
+        if (not column_mapping or len(column_mapping) < 2) and isinstance(report.get('file_metrics'), dict):
+            # Try to pick the first file's metrics to determine keys and preferred order
+            first_fname = None
+            files_in_report = None
+            if isinstance(report.get('files'), list) and report['files']:
+                files_in_report = report['files']
+                first_fname = report['files'][0]
+            elif isinstance(report.get('submission'), dict) and report['submission'].get('files'):
+                files_in_report = report['submission']['files']
+                first_fname = report['submission']['files'][0]
+
+            if first_fname and first_fname in report['file_metrics']:
+                fm = report['file_metrics'][first_fname]
+                # Preferred ordering
+                ordered_keys = []
+                for k in ('student_id', 'filename', 'avg_score', 'ai_confidence'):
+                    if k in fm:
+                        ordered_keys.append(k)
+                # add any remaining keys (e.g., criterion_*)
+                for k in fm.keys():
+                    if k not in ordered_keys:
+                        ordered_keys.append(k)
+
+                # Build mapping: use 'file' for filename, otherwise file_metrics.<key>
+                auto_map: Dict[str, str] = {}
+                for k in ordered_keys:
+                    if k == 'filename':
+                        auto_map[k] = 'file'
+                    else:
+                        auto_map[k] = f'file_metrics.{k}'
+
+                # Use this mapping only if the sheet is empty (so we don't overwrite existing headers)
+                if not existing:
+                    column_mapping = auto_map
+
         headers = list(column_mapping.keys())
         if not existing:
             ws.append_row(headers, value_input_option="USER_ENTERED")
@@ -148,6 +188,9 @@ class SheetsClient:
                 # Build a minimal context for path resolution where 'file' points to filename
                 ctx = dict(report)
                 ctx['file'] = f
+                # If report contains per-file metrics (file_metrics keyed by filename), expose it for mapping
+                if isinstance(report.get('file_metrics'), dict):
+                    ctx['file_metrics'] = report['file_metrics'].get(f, {})
                 for col, path in column_mapping.items():
                     val = _resolve_path(ctx, path)
                     row.append(val)

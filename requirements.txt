@@ -1,7 +1,7 @@
 fastapi
 uvicorn
 gradio  # retained temporarily for backward compatibility with existing tests; can be removed later
-streamlit>=1.36.0
+streamlit
 pymupdf
 python-dotenv
 langchain
@@ -24,3 +24,6 @@ xlrd
 scikit-learn
 gspread
 google-auth
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib

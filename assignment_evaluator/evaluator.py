@@ -84,10 +84,71 @@ def grade_submission(zip_path: str, rubric: Dict[str, Any], llm=None, master_cod
         for crit_key, crit in grading_criteria.items():
             results[crit_key] = evaluate_criterion(crit, files, static_results.get(crit_key), llm, master_context)
 
-        # AI-detection
+        # AI-detection for whole submission
         ai_flags = detect_ai_generated(files, llm)
 
-        return {"results": results, "ai_flags": ai_flags, "static_summary": static_results}
+        # Build per-file metrics so callers (and Google Sheets export) can persist one row per file
+        from pathlib import Path as _Path
+        import re as _re
+
+        def _extract_student_id(filename: str) -> str:
+            """Extract leading 9-digit student id from filename, or empty string."""
+            m = _re.match(r"^(\d{9})", filename)
+            return m.group(1) if m else ""
+
+        file_metrics: Dict[str, Dict[str, Any]] = {}
+        # For efficiency, if no LLM is available, avoid per-criterion LLM calls and use aggregated result
+        for fp in files:
+            name = _Path(fp).name
+            metrics: Dict[str, Any] = {}
+            metrics['student_id'] = _extract_student_id(name)
+            metrics['filename'] = name
+
+            # Stylometric features + ai confidence for this file
+            try:
+                code_text = _Path(fp).read_text(encoding='utf-8', errors='ignore')
+                features = calculate_stylometric_features(code_text)
+                metrics['ai_confidence'] = assess_ai_confidence(features)
+            except Exception:
+                metrics['ai_confidence'] = 0.0
+
+            # Per-criterion scoring for this file (LLM when available)
+            per_scores = {}
+            for crit_key, crit in grading_criteria.items():
+                try:
+                    if llm is not None:
+                        # evaluate criterion with only this file as context
+                        eval_res = evaluate_criterion(crit, [fp], None, llm, master_context)
+                        score = eval_res.get('llm_result', {}).get('score', None)
+                    else:
+                        # Fallback: use aggregated result (if present) or default
+                        agg = results.get(crit_key, {})
+                        score = agg.get('llm_result', {}).get('score') if agg else None
+                except Exception:
+                    score = None
+                per_scores[f'criterion_{crit_key}'] = score
+
+            # Average per-file score (mean of available criterion scores)
+            score_vals = [v for v in per_scores.values() if isinstance(v, (int, float))]
+            if score_vals:
+                metrics['avg_score'] = sum(score_vals) / len(score_vals)
+            else:
+                metrics['avg_score'] = None
+
+            # Merge per-criterion scores into metrics
+            metrics.update(per_scores)
+            file_metrics[name] = metrics
+
+        # Also include list of basenames to support the existing Sheets helper which expects a list
+        files_list = [_Path(fp).name for fp in files]
+
+        return {
+            "results": results,
+            "ai_flags": ai_flags,
+            "static_summary": static_results,
+            "files": files_list,
+            "file_metrics": file_metrics,
+        }
 
 
 def extract_grading_criteria(rubric: Dict[str, Any]) -> Dict[str, Any]:

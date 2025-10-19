@@ -797,28 +797,60 @@ def main():
                             if not check_gspread_available():
                                 st.error("gspread/google-auth are not available in this runtime")
                             else:
-                                info = json.loads(st.session_state.gs_service_account)
-                                client = SheetsClient.from_service_account_info(info)
-                                # Validate spreadsheet access first
-                                sid = st.session_state.gs_spreadsheet_id
-                                if not client.validate_spreadsheet_access(sid):
-                                    st.error("Service account cannot access spreadsheet. Run preflight check in settings.")
-                                else:
-                                    # Prepare a simple normalized report context
-                                    avg_score = sum(r['llm_result']['score'] for r in report['results'].values()) / max(1, len(report['results']))
-                                    report_context = dict(report)
-                                    report_context['avg_score'] = avg_score
-                                    # Derive files list if available
-                                    # Column mapping
+                                sa_text = (st.session_state.get('gs_service_account') or '').strip()
+                                info = None
+                                if sa_text:
                                     try:
-                                        mapping = json.loads(st.session_state.gs_column_mapping)
-                                    except Exception:
-                                        st.error("Invalid column mapping JSON. Open settings to fix.")
-                                        mapping = None
+                                        info = json.loads(sa_text)
+                                    except Exception as e:
+                                        st.error(f"Service account JSON is invalid: {e}")
+                                        info = None
+                                else:
+                                    # Try to load creds.json from project root as a convenience
+                                    try:
+                                        with open('creds.json', 'r', encoding='utf-8') as f:
+                                            info = json.load(f)
+                                            st.info("Using local creds.json for authentication")
+                                    except FileNotFoundError:
+                                        st.error("No service account JSON provided and creds.json not found in project.")
 
-                                    if mapping:
-                                        client.append_student_rows(sid, st.session_state.gs_worksheet, report_context, mapping)
-                                        st.success("✅ Saved rows to Google Sheets")
+                                if not info:
+                                    # nothing to do
+                                    pass
+                                else:
+                                    try:
+                                        client = SheetsClient.from_service_account_info(info)
+                                    except Exception as e:
+                                        st.error(f"Failed to initialize Sheets client: {e}")
+                                        client = None
+
+                                    if client:
+                                        # Validate spreadsheet access first. Allow default sheet id constant if empty
+                                        sid = st.session_state.get('gs_spreadsheet_id') or "1K75pk59biCj424T6U91HIfPP54YwOomGFUKwMOlvXJ8"
+                                        if not client.validate_spreadsheet_access(sid):
+                                            st.error("Service account cannot access spreadsheet. Run preflight check in settings or verify sharing settings.")
+                                        else:
+                                            # Prepare a simple normalized report context
+                                            try:
+                                                avg_score = sum(r['llm_result']['score'] for r in report['results'].values()) / max(1, len(report['results']))
+                                            except Exception:
+                                                avg_score = 0
+                                            report_context = dict(report)
+                                            report_context['avg_score'] = avg_score
+
+                                            # Column mapping
+                                            try:
+                                                mapping = json.loads(st.session_state.get('gs_column_mapping', '{}'))
+                                            except Exception:
+                                                st.error("Invalid column mapping JSON. Open settings to fix.")
+                                                mapping = None
+
+                                            if mapping:
+                                                try:
+                                                    client.append_student_rows(sid, st.session_state.get('gs_worksheet', 'Sheet1'), report_context, mapping)
+                                                    st.success("✅ Saved rows to Google Sheets")
+                                                except Exception as e:
+                                                    st.error(f"Failed to append rows: {e}")
                         except Exception as e:
                             st.error(f"Failed to save report to Google Sheets: {e}")
 
